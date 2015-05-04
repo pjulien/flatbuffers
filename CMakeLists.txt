@@ -40,6 +40,7 @@ set(FlatBuffers_Tests_SRCS
   include/flatbuffers/idl.h
   include/flatbuffers/util.h
   src/idl_parser.cpp
+  src/idl_gen_general.cpp
   src/idl_gen_text.cpp
   src/idl_gen_fbs.cpp
   tests/test.cpp
@@ -84,10 +85,9 @@ if(FLATBUFFERS_CODE_COVERAGE)
 endif()
 
 if(BIICODE)
-  # Execute biicode building
-  include(CMake/biicode.cmake)
+  include(biicode/cmake/biicode.cmake)
   return()
-endif(BIICODE)
+endif()
 
 include_directories(include)
 

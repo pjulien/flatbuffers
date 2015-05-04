@@ -60,7 +60,7 @@ uint32_t lcg_rand() {
 void lcg_reset() { lcg_seed = 48271; }
 
 // example of how to build up a serialized buffer algorithmically:
-std::string CreateFlatBufferTest() {
+flatbuffers::unique_ptr_t CreateFlatBufferTest(std::string &buffer) {
   flatbuffers::FlatBufferBuilder builder;
 
   auto vec = Vec3(1, 2, 3, 0, Color_Red, Test(10, 20));
@@ -119,24 +119,25 @@ std::string CreateFlatBufferTest() {
   #endif
 
   // return the buffer for the caller to use.
-  return std::string(reinterpret_cast<const char *>(builder.GetBufferPointer()),
-                     builder.GetSize());
+  auto bufferpointer =
+    reinterpret_cast<const char *>(builder.GetBufferPointer());
+  buffer.assign(bufferpointer, bufferpointer + builder.GetSize());
+
+  return builder.ReleaseBufferPointer();
 }
 
 //  example of accessing a buffer loaded in memory:
-void AccessFlatBufferTest(const std::string &flatbuf) {
+void AccessFlatBufferTest(const uint8_t *flatbuf, size_t length) {
 
   // First, verify the buffers integrity (optional)
-  flatbuffers::Verifier verifier(
-    reinterpret_cast<const uint8_t *>(flatbuf.c_str()),
-    flatbuf.length());
+  flatbuffers::Verifier verifier(flatbuf, length);
   TEST_EQ(VerifyMonsterBuffer(verifier), true);
 
   TEST_EQ(strcmp(MonsterIdentifier(), "MONS"), 0);
-  TEST_EQ(MonsterBufferHasIdentifier(flatbuf.c_str()), true);
+  TEST_EQ(MonsterBufferHasIdentifier(flatbuf), true);
 
   // Access the buffer from the root.
-  auto monster = GetMonster(flatbuf.c_str());
+  auto monster = GetMonster(flatbuf);
 
   TEST_EQ(monster->hp(), 80);
   TEST_EQ(monster->mana(), 150);  // default
@@ -157,6 +158,8 @@ void AccessFlatBufferTest(const std::string &flatbuf) {
   unsigned char inv_data[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
   for (auto it = inventory->begin(); it != inventory->end(); ++it)
     TEST_EQ(*it, inv_data[it - inventory->begin()]);
+
+  TEST_EQ(monster->color(), Color_Blue);
 
   // Example of accessing a union:
   TEST_EQ(monster->test_type(), Any_Monster);  // First make sure which it is.
@@ -199,7 +202,39 @@ void AccessFlatBufferTest(const std::string &flatbuf) {
   for (auto it = tests->begin(); it != tests->end(); ++it) {
     TEST_EQ(it->a() == 10 || it->a() == 30, true);  // Just testing iterators.
   }
+}
 
+// Change a FlatBuffer in-place, after it has been constructed.
+void MutateFlatBuffersTest(uint8_t *flatbuf, std::size_t length) {
+  // Get non-const pointer to root.
+  auto monster = GetMutableMonster(flatbuf);
+
+  // Each of these tests mutates, then tests, then set back to the original,
+  // so we can test that the buffer in the end still passes our original test.
+  auto hp_ok = monster->mutate_hp(10);
+  TEST_EQ(hp_ok, true);  // Field was present.
+  TEST_EQ(monster->hp(), 10);
+  monster->mutate_hp(80);
+
+  auto mana_ok = monster->mutate_mana(10);
+  TEST_EQ(mana_ok, false);  // Field was NOT present, because default value.
+
+  // Mutate structs.
+  auto pos = monster->mutable_pos();
+  auto test3 = pos->mutable_test3();  // Struct inside a struct.
+  test3.mutate_a(50);                 // Struct fields never fail.
+  TEST_EQ(test3.a(), 50);
+  test3.mutate_a(10);
+
+  // Mutate vectors.
+  auto inventory = monster->mutable_inventory();
+  inventory->Mutate(9, 100);
+  TEST_EQ(inventory->Get(9), 100);
+  inventory->Mutate(9, 9);
+
+  // Run the verifier and the regular test to make sure we didn't trample on
+  // anything.
+  AccessFlatBufferTest(flatbuf, length);
 }
 
 // example of parsing text straight into a buffer, and generating
@@ -365,6 +400,8 @@ void FuzzTest2() {
   const int num_struct_definitions = 5;  // Subset of num_definitions.
   const int fields_per_definition = 15;
   const int instances_per_definition = 5;
+  const int deprecation_rate = 10;        // 1 in deprecation_rate fields will
+                                          // be deprecated.
 
   std::string schema = "namespace test;\n\n";
 
@@ -403,24 +440,41 @@ void FuzzTest2() {
       "{\n");
 
     for (int field = 0; field < fields_per_definition; field++) {
+      const bool is_last_field = field == fields_per_definition - 1;
+
+      // Deprecate 1 in deprecation_rate fields. Only table fields can be
+      // deprecated.
+      // Don't deprecate the last field to avoid dangling commas in JSON.
+      const bool deprecated = !is_struct &&
+                              !is_last_field &&
+                              (lcg_rand() % deprecation_rate == 0);
+
       std::string field_name = "f" + flatbuffers::NumToString(field);
       AddToSchemaAndInstances(("  " + field_name + ":").c_str(),
-                              (field_name + ": ").c_str());
+                              deprecated ? "" : (field_name + ": ").c_str());
       // Pick random type:
       int base_type = lcg_rand() % (flatbuffers::BASE_TYPE_UNION + 1);
       switch (base_type) {
         case flatbuffers::BASE_TYPE_STRING:
           if (is_struct) {
-            Dummy();  // No strings in structs,
+            Dummy();  // No strings in structs.
           } else {
-            AddToSchemaAndInstances("string", "\"hi\"");
+            AddToSchemaAndInstances("string", deprecated ? "" : "\"hi\"");
+          }
+          break;
+        case flatbuffers::BASE_TYPE_VECTOR:
+          if (is_struct) {
+            Dummy();  // No vectors in structs.
+          }
+          else {
+            AddToSchemaAndInstances("[ubyte]",
+                                    deprecated ? "" : "[\n0,\n1,\n255\n]");
           }
           break;
         case flatbuffers::BASE_TYPE_NONE:
         case flatbuffers::BASE_TYPE_UTYPE:
         case flatbuffers::BASE_TYPE_STRUCT:
         case flatbuffers::BASE_TYPE_UNION:
-        case flatbuffers::BASE_TYPE_VECTOR:
           if (definition) {
             // Pick a random previous definition and random data instance of
             // that definition.
@@ -428,7 +482,9 @@ void FuzzTest2() {
             int instance = lcg_rand() % instances_per_definition;
             AddToSchemaAndInstances(
               ("D" + flatbuffers::NumToString(defref)).c_str(),
-              definitions[defref].instances[instance].c_str());
+              deprecated
+                ? ""
+                : definitions[defref].instances[instance].c_str());
           } else {
             // If this is the first definition, we have no definition we can
             // refer to.
@@ -437,13 +493,18 @@ void FuzzTest2() {
           break;
         default:
           // All the scalar types.
-          AddToSchemaAndInstances(
-            flatbuffers::kTypeNames[base_type],
-            flatbuffers::NumToString(lcg_rand() % 128).c_str());
+          schema += flatbuffers::kTypeNames[base_type];
+
+          if (!deprecated) {
+            // We want each instance to use its own random value.
+            for (int inst = 0; inst < instances_per_definition; inst++)
+              definitions[definition].instances[inst] +=
+              flatbuffers::NumToString(lcg_rand() % 128).c_str();
+          }
       }
       AddToSchemaAndInstances(
-        ";\n",
-        field == fields_per_definition - 1 ? "\n" : ",\n");
+        deprecated ? "(deprecated);\n" : ";\n",
+        deprecated ? "" : is_last_field ? "\n" : ",\n");
     }
     AddToSchemaAndInstances("}\n\n", "}");
   }
@@ -593,8 +654,13 @@ void UnicodeTest() {
 int main(int /*argc*/, const char * /*argv*/[]) {
   // Run our various test suites:
 
-  auto flatbuf = CreateFlatBufferTest();
-  AccessFlatBufferTest(flatbuf);
+  std::string rawbuf;
+  auto flatbuf = CreateFlatBufferTest(rawbuf);
+  AccessFlatBufferTest(reinterpret_cast<const uint8_t *>(rawbuf.c_str()),
+                       rawbuf.length());
+  AccessFlatBufferTest(flatbuf.get(), rawbuf.length());
+
+  MutateFlatBuffersTest(flatbuf.get(), rawbuf.length());
 
   #ifndef __ANDROID__  // requires file access
   ParseAndGenerateTextTest();

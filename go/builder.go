@@ -198,7 +198,7 @@ func (b *Builder) Prep(size, additionalBytes int) {
 	alignSize &= (size - 1)
 
 	// Reallocate the buffer if needed:
-	for int(b.head) < alignSize+size+additionalBytes {
+	for int(b.head) <= alignSize+size+additionalBytes {
 		oldBufSize := len(b.Bytes)
 		b.growByteBuffer()
 		b.head += UOffsetT(len(b.Bytes) - oldBufSize)
@@ -257,6 +257,18 @@ func (b *Builder) CreateString(s string) UOffsetT {
 	copy(b.Bytes[b.head:b.head+l], x)
 
 	return b.EndVector(len(x))
+}
+
+// CreateByteVector writes a ubyte vector
+func (b *Builder) CreateByteVector(v []byte) UOffsetT {
+	b.Prep(int(SizeUOffsetT), len(v)*SizeByte)
+
+	l := UOffsetT(len(v))
+
+	b.head -= l
+	copy(b.Bytes[b.head:b.head+l], v)
+
+	return b.EndVector(len(v))
 }
 
 func (b *Builder) notNested() {

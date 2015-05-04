@@ -380,8 +380,12 @@ class Parser {
 // Utility functions for multiple generators:
 
 extern std::string MakeCamel(const std::string &in, bool first = true);
+
+struct CommentConfig;
+
 extern void GenComment(const std::vector<std::string> &dc,
                        std::string *code_ptr,
+                       const CommentConfig *config,
                        const char *prefix = "");
 
 // Container of options that may apply to any of the source/text generators.
@@ -391,6 +395,7 @@ struct GeneratorOptions {
   bool output_enum_identifiers;
   bool prefixed_enums;
   bool include_dependence_headers;
+  bool mutable_buffer;
 
   // Possible options for the more general generator below.
   enum Language { kJava, kCSharp, kGo, kMAX };
@@ -400,6 +405,7 @@ struct GeneratorOptions {
   GeneratorOptions() : strict_json(false), indent_step(2),
                        output_enum_identifiers(true), prefixed_enums(true),
                        include_dependence_headers(false),
+                       mutable_buffer(false),
                        lang(GeneratorOptions::kJava) {}
 };
 

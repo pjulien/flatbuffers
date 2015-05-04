@@ -89,6 +89,7 @@ static void Error(const char *err, const char *obj, bool usage,
       "  --no-prefix     Don\'t prefix enum values with the enum type in C++.\n"
       "  --gen-includes  Generate include statements for included schemas the\n"
       "                  generated file depends on (C++).\n"
+      "  --gen-mutable   Generate accessors that can mutate buffers in-place.\n"
       "  --proto         Input is a .proto, translate to .fbs.\n"
       "FILEs may depend on declarations in earlier files.\n"
       "FILEs after the -- must be binary flatbuffer format files.\n"
@@ -112,22 +113,24 @@ int main(int argc, const char *argv[]) {
   std::vector<std::string> filenames;
   std::vector<const char *> include_directories;
   size_t binary_files_from = std::numeric_limits<size_t>::max();
-  for (int i = 1; i < argc; i++) {
-    const char *arg = argv[i];
+  for (int argi = 1; argi < argc; argi++) {
+    const char *arg = argv[argi];
     if (arg[0] == '-') {
       if (filenames.size() && arg[1] != '-')
         Error("invalid option location", arg, true);
       std::string opt = arg;
       if (opt == "-o") {
-        if (++i >= argc) Error("missing path following", arg, true);
-        output_path = flatbuffers::ConCatPathFileName(argv[i], "");
+        if (++argi >= argc) Error("missing path following", arg, true);
+        output_path = flatbuffers::ConCatPathFileName(argv[argi], "");
       } else if(opt == "-I") {
-        if (++i >= argc) Error("missing path following", arg, true);
-        include_directories.push_back(argv[i]);
+        if (++argi >= argc) Error("missing path following", arg, true);
+        include_directories.push_back(argv[argi]);
       } else if(opt == "--strict-json") {
         opts.strict_json = true;
       } else if(opt == "--no-prefix") {
         opts.prefixed_enums = false;
+      } else if(opt == "--gen-mutable") {
+        opts.mutable_buffer = true;
       } else if(opt == "--gen-includes") {
         opts.include_dependence_headers = true;
       } else if(opt == "--") {  // Separator between text and binary inputs.
@@ -149,7 +152,7 @@ int main(int argc, const char *argv[]) {
         found:;
       }
     } else {
-      filenames.push_back(argv[i]);
+      filenames.push_back(argv[argi]);
     }
   }
 
